@@ -1,0 +1,102 @@
+package mywork
+/**
+  * Created by Jia Bin Liao(benliao985@gmail.com) on 5/14/16.
+  */
+import java.io.File
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.{SparkConf, SparkContext}
+
+object WordCount {
+  var infile = "" //输入文件路径定义为var，这样main传进来的路径可以给infile,且HdfsOps可以访问
+  var filesize:Long = 0
+  var loopnum = 0
+
+  def main(args: Array[String]) {
+    if (args.length < 2) {
+      System.out.println("Usage: <input> <output> [number for loop]")
+      System.exit(1)
+    }else if(args.length == 2) {
+      println("default loop: 0")
+    }else {
+      loopnum = args(2).toInt
+    }
+    infile = args(0) // Input local files OR files on HDFS
+    val outfile = args(1) //Output to the local OR HDFS
+
+    println("     =======================")
+    println("     || WordCount in Spark !||")
+    println("     =======================")
+
+    println("Input: " + infile)
+    getFileSize(infile)
+    println("Output: " + outfile + "\n")
+
+    val conf = new SparkConf().setAppName("word count")
+    //conf.set("spark.testing.memory", "2147480000")
+    val sc = new SparkContext(conf)
+    val indata = sc.textFile(infile, 2).cache()
+
+    //flatMap把每行按空格分割单词
+    //map把每个单词映射成(word,1)的格式
+    //reduceByKey则按key，在此即单词，做整合，即把相同单词的次数1相加
+    //故意延长job运行时间，加上循环
+    for (i <- 1 to loopnum) {
+      val words = indata.flatMap(line => line.split(" ")).map(word => (word, 1)).reduceByKey((a, b) => a + b)
+      //再次map把K，V调换
+      val convert = words.map {
+        case (key, value) => (value, key)
+      }.sortByKey(false, 1)
+
+      if(i == 1 || loopnum == 0)convert.saveAsTextFile(outfile)
+      println()
+      println("All words are counted!")
+      Thread sleep(10000)
+    }
+  }
+  //获取local文件的大小
+  def getLocalFileSize(lfname: String): Long = {
+    new File(lfname) match {
+      case null => 0
+      case cat if cat.isFile => cat.length()
+    }
+  }
+  //获取文件大小,包括local和hdfs上
+  def getFileSize(fname: String): Unit = {
+    if (fname.startsWith("/")) {
+      filesize = getLocalFileSize(fname)
+      if (filesize == 0) {
+        println("Input file not exist!")
+        System.exit(1)
+      } else {
+        println("Input file size:" + filesize + " bytes")
+      }
+    } else {
+      filesize = HdfsOps.du(fname)
+      if (!HdfsOps.fileExist) {
+        println("Input file not exist!")
+        System.exit(1)
+      } else {
+        println("Input file size:" + filesize + " bytes")
+      }
+    }
+  }
+}
+
+//获取HDFS上文件的大小
+object HdfsOps {
+  private val conf = new Configuration()
+  conf.addResource(new Path("/opt/hadoop-2.6.0/etc/hadoop/core-site.xml"))
+  private val fs = FileSystem.get(conf)
+  val fileExist = fs.exists(new Path(WordCount.infile))
+
+  def duWithReplication(path:String): Long = {
+    val fsPath = new Path(path)
+    fs.getContentSummary(fsPath).getSpaceConsumed
+  }
+
+  def du(path: String): Long ={
+    val fsPath = new Path(path)
+    fs.getContentSummary(fsPath).getLength
+  }
+}
